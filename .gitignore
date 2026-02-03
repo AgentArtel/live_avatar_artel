@@ -226,3 +226,29 @@ cogvideox_output
 
 VBench
 *.pt
+
+# Frontend (Next.js/React)
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/dist/
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+frontend/.vercel
+frontend/.turbo
+frontend/*.log
+frontend/.DS_Store
+
+# Backend (RunPod)
+backend/__pycache__/
+backend/*.pyc
+backend/.env
+backend/outputs/
+backend/ckpt/
+
+# Documentation build
+docs/_build/
+docs/.doctrees/
