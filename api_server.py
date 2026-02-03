@@ -98,16 +98,22 @@ async def startup_event():
     os.environ["ENABLE_FP8"] = "true"
     
     # Configure for multi-GPU (2 GPUs: 1 DiT + 1 VAE parallel) or single-GPU
+    use_multi_gpu = False  # Start with False, try to enable if conditions are met
+    
     if num_gpus >= 2:
-        logger.info("🚀 Configuring for 2-GPU setup (1 DiT GPU + 1 VAE parallel GPU)")
+        logger.info("🚀 Attempting 2-GPU setup (1 DiT GPU + 1 VAE parallel GPU)")
+        
+        # Set required environment variables for NCCL
         os.environ["RANK"] = "0"
         os.environ["WORLD_SIZE"] = "2"
         os.environ["LOCAL_RANK"] = "0"
+        os.environ["MASTER_ADDR"] = "localhost"
+        os.environ["MASTER_PORT"] = "29500"
         os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
         
-        # Use NCCL backend for multi-GPU (more efficient than gloo)
-        if not dist.is_initialized():
-            try:
+        # Try to initialize NCCL for multi-GPU
+        try:
+            if not dist.is_initialized():
                 dist.init_process_group(
                     backend="nccl",
                     init_method="env://",
@@ -115,21 +121,23 @@ async def startup_event():
                     world_size=2
                 )
                 logger.info("✅ NCCL process group initialized for multi-GPU")
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to initialize NCCL, falling back to single-GPU: {e}")
-                num_gpus = 1  # Fall back to single GPU
-        
-        use_multi_gpu = (num_gpus >= 2 and dist.is_initialized())
-        num_gpus_dit = 1  # Use 1 GPU for DiT
-        enable_vae_parallel = True  # Use 1 GPU for VAE parallel
-        single_gpu = False
-        offload_model = False  # Don't need offloading with 2 GPUs
-    else:
+                use_multi_gpu = True
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to initialize NCCL for multi-GPU: {e}")
+            logger.info("Falling back to single-GPU mode with memory optimizations")
+            # Clean up any partial initialization
+            if dist.is_initialized():
+                dist.destroy_process_group()
+            use_multi_gpu = False
+    
+    # Single-GPU configuration (either by default or after multi-GPU failure)
+    if not use_multi_gpu:
         logger.info("🔧 Configuring for single-GPU setup with memory optimizations")
         os.environ["RANK"] = "0"
         os.environ["WORLD_SIZE"] = "1"
         os.environ["LOCAL_RANK"] = "0"
         
+        # Use gloo backend for single-GPU (doesn't require MASTER_ADDR)
         if not dist.is_initialized():
             dist.init_process_group(
                 backend="gloo",
@@ -137,12 +145,18 @@ async def startup_event():
                 rank=0,
                 world_size=1
             )
-        
-        use_multi_gpu = False
+    
+    # Set configuration based on whether we're using multi-GPU
+    if use_multi_gpu:
+        num_gpus_dit = 1
+        enable_vae_parallel = True
+        single_gpu = False
+        offload_model = False
+    else:
         num_gpus_dit = 1
         enable_vae_parallel = False
         single_gpu = True
-        offload_model = True  # Need offloading for single GPU
+        offload_model = True
     
     import argparse
     parser = argparse.ArgumentParser()
