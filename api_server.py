@@ -80,17 +80,14 @@ async def startup_event():
     
     logger.info("Initializing LiveAvatar pipeline...")
     
-    # Set PyTorch CUDA memory allocation config to reduce fragmentation
-    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-    
-    # Clear any existing GPU memory before initialization
+    # Clear GPU cache before starting
     if torch.cuda.is_available():
-        logger.info("Clearing GPU memory before initialization...")
         torch.cuda.empty_cache()
-        import gc
-        gc.collect()
-        torch.cuda.empty_cache()
-        logger.info(f"GPU memory after cleanup: {torch.cuda.memory_allocated() / 1024**3:.2f} GB allocated")
+        logger.info(f"GPU memory cleared. Available: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+    
+    # Set memory optimization environment variables
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+    os.environ["ENABLE_FP8"] = "true"
     
     os.environ["RANK"] = "0"
     os.environ["WORLD_SIZE"] = "1"
@@ -124,12 +121,12 @@ async def startup_event():
     parser.add_argument("--sample_solver", type=str, default="euler")
     parser.add_argument("--single_gpu", action="store_true", default=True)
     parser.add_argument("--ckpt_dir", type=str, default="/workspace/LiveAvatar/ckpt/Wan2.2-S2V-14B/")
-    parser.add_argument("--fp8", action="store_true", default=False)
+    parser.add_argument("--fp8", action="store_true", default=True)  # Enable FP8 by default
     
     # Missing arguments that are required
     parser.add_argument("--ulysses_size", type=int, default=1)
     parser.add_argument("--t5_fsdp", action="store_true", default=False)
-    parser.add_argument("--t5_cpu", action="store_true", default=False)
+    parser.add_argument("--t5_cpu", action="store_true", default=True)  # Offload T5 to CPU to save GPU memory
     parser.add_argument("--dit_fsdp", action="store_true", default=False)
     parser.add_argument("--save_dir", type=str, default="./output/gradio/")
     parser.add_argument("--sample_shift", type=float, default=None)
@@ -137,7 +134,7 @@ async def startup_event():
     parser.add_argument("--lora_path", type=str, default=None)
     parser.add_argument("--using_merged_ckpt", action="store_true", default=False)
     parser.add_argument("--enable_vae_parallel", action="store_true", default=False)
-    parser.add_argument("--offload_kv_cache", action="store_true", default=False)
+    parser.add_argument("--offload_kv_cache", action="store_true", default=True)  # Enable KV cache offloading
     parser.add_argument("--enable_tts", action="store_true", default=False)
     parser.add_argument("--pose_video", type=str, default=None)
     parser.add_argument("--start_from_ref", action="store_true", default=False)
@@ -147,12 +144,18 @@ async def startup_event():
     
     args = parser.parse_args([])
     
-    # Ensure single GPU settings
+    # CRITICAL: Force memory optimizations for single GPU
     args.single_gpu = True
     args.enable_vae_parallel = False
     args.ulysses_size = 1
     args.t5_fsdp = False
     args.dit_fsdp = False
+    args.fp8 = True  # Force FP8 for memory savings
+    args.t5_cpu = True  # Force T5 to CPU - saves ~5-6GB
+    args.offload_kv_cache = True  # Offload KV cache to CPU
+    args.offload_model = True  # Ensure model offloading is enabled
+    
+    logger.info(f"Memory optimization settings: FP8={args.fp8}, T5_CPU={args.t5_cpu}, KV_Offload={args.offload_kv_cache}, Model_Offload={args.offload_model}")
     
     training_settings = parse_args_for_training_config(args.training_config)
     
