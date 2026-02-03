@@ -6,6 +6,7 @@ import os
 import sys
 import uuid
 import logging
+import traceback
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
@@ -80,26 +81,68 @@ async def startup_event():
     
     logger.info("Initializing LiveAvatar pipeline...")
     
-    # Clear GPU cache before starting
+    # Detect available GPUs
+    num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    logger.info(f"Detected {num_gpus} GPU(s)")
+    
+    # Clear GPU cache for all GPUs
     if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        logger.info(f"GPU memory cleared. Available: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+        for i in range(num_gpus):
+            torch.cuda.set_device(i)
+            torch.cuda.empty_cache()
+            if i == 0:
+                logger.info(f"GPU {i}: {torch.cuda.get_device_properties(i).total_memory / 1024**3:.2f} GB available")
     
     # Set memory optimization environment variables
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
     os.environ["ENABLE_FP8"] = "true"
     
-    os.environ["RANK"] = "0"
-    os.environ["WORLD_SIZE"] = "1"
-    os.environ["LOCAL_RANK"] = "0"
-    
-    if not dist.is_initialized():
-        dist.init_process_group(
-            backend="gloo",
-            init_method="tcp://localhost:29500",
-            rank=0,
-            world_size=1
-        )
+    # Configure for multi-GPU (2 GPUs: 1 DiT + 1 VAE parallel) or single-GPU
+    if num_gpus >= 2:
+        logger.info("🚀 Configuring for 2-GPU setup (1 DiT GPU + 1 VAE parallel GPU)")
+        os.environ["RANK"] = "0"
+        os.environ["WORLD_SIZE"] = "2"
+        os.environ["LOCAL_RANK"] = "0"
+        os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
+        
+        # Use NCCL backend for multi-GPU (more efficient than gloo)
+        if not dist.is_initialized():
+            try:
+                dist.init_process_group(
+                    backend="nccl",
+                    init_method="env://",
+                    rank=0,
+                    world_size=2
+                )
+                logger.info("✅ NCCL process group initialized for multi-GPU")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to initialize NCCL, falling back to single-GPU: {e}")
+                num_gpus = 1  # Fall back to single GPU
+        
+        use_multi_gpu = (num_gpus >= 2 and dist.is_initialized())
+        num_gpus_dit = 1  # Use 1 GPU for DiT
+        enable_vae_parallel = True  # Use 1 GPU for VAE parallel
+        single_gpu = False
+        offload_model = False  # Don't need offloading with 2 GPUs
+    else:
+        logger.info("🔧 Configuring for single-GPU setup with memory optimizations")
+        os.environ["RANK"] = "0"
+        os.environ["WORLD_SIZE"] = "1"
+        os.environ["LOCAL_RANK"] = "0"
+        
+        if not dist.is_initialized():
+            dist.init_process_group(
+                backend="gloo",
+                init_method="tcp://localhost:29500",
+                rank=0,
+                world_size=1
+            )
+        
+        use_multi_gpu = False
+        num_gpus_dit = 1
+        enable_vae_parallel = False
+        single_gpu = True
+        offload_model = True  # Need offloading for single GPU
     
     import argparse
     parser = argparse.ArgumentParser()
@@ -109,7 +152,7 @@ async def startup_event():
     parser.add_argument("--size", type=str, default="704*384")
     parser.add_argument("--base_seed", type=int, default=420)
     parser.add_argument("--training_config", type=str, default="liveavatar/configs/s2v_causal_sft.yaml")
-    parser.add_argument("--offload_model", type=str2bool, default=True)
+    parser.add_argument("--offload_model", type=str2bool, default=offload_model)
     parser.add_argument("--convert_model_dtype", action="store_true", default=False)
     parser.add_argument("--infer_frames", type=int, default=48)
     parser.add_argument("--load_lora", action="store_true", default=True)
@@ -117,9 +160,9 @@ async def startup_event():
     parser.add_argument("--sample_steps", type=int, default=4)
     parser.add_argument("--sample_guide_scale", type=float, default=0.0)
     parser.add_argument("--num_clip", type=int, default=100)
-    parser.add_argument("--num_gpus_dit", type=int, default=1)
+    parser.add_argument("--num_gpus_dit", type=int, default=num_gpus_dit)
     parser.add_argument("--sample_solver", type=str, default="euler")
-    parser.add_argument("--single_gpu", action="store_true", default=True)
+    parser.add_argument("--single_gpu", action="store_true", default=single_gpu)
     parser.add_argument("--ckpt_dir", type=str, default="/workspace/LiveAvatar/ckpt/Wan2.2-S2V-14B/")
     parser.add_argument("--fp8", action="store_true", default=True)  # Enable FP8 by default
     
@@ -133,7 +176,7 @@ async def startup_event():
     parser.add_argument("--frame_num", type=int, default=None)
     parser.add_argument("--lora_path", type=str, default=None)
     parser.add_argument("--using_merged_ckpt", action="store_true", default=False)
-    parser.add_argument("--enable_vae_parallel", action="store_true", default=False)
+    parser.add_argument("--enable_vae_parallel", action="store_true", default=enable_vae_parallel)
     parser.add_argument("--offload_kv_cache", action="store_true", default=True)  # Enable KV cache offloading
     parser.add_argument("--enable_tts", action="store_true", default=False)
     parser.add_argument("--pose_video", type=str, default=None)
@@ -141,21 +184,28 @@ async def startup_event():
     parser.add_argument("--drop_motion_noisy", action="store_true", default=False)
     parser.add_argument("--server_port", type=int, default=7860)
     parser.add_argument("--server_name", type=str, default="0.0.0.0")
+    parser.add_argument("--init_on_cpu", type=str2bool, default=True)  # Initialize model on CPU first
     
     args = parser.parse_args([])
     
-    # CRITICAL: Force memory optimizations for single GPU
-    args.single_gpu = True
-    args.enable_vae_parallel = False
+    # CRITICAL: Force settings based on GPU configuration
+    args.single_gpu = single_gpu
+    args.enable_vae_parallel = enable_vae_parallel
+    args.num_gpus_dit = num_gpus_dit
     args.ulysses_size = 1
     args.t5_fsdp = False
     args.dit_fsdp = False
     args.fp8 = True  # Force FP8 for memory savings
     args.t5_cpu = True  # Force T5 to CPU - saves ~5-6GB
     args.offload_kv_cache = True  # Offload KV cache to CPU
-    args.offload_model = True  # Ensure model offloading is enabled
+    args.offload_model = offload_model
+    args.init_on_cpu = True  # Initialize model on CPU first to save GPU memory during loading
     
-    logger.info(f"Memory optimization settings: FP8={args.fp8}, T5_CPU={args.t5_cpu}, KV_Offload={args.offload_kv_cache}, Model_Offload={args.offload_model}")
+    logger.info(f"📊 Configuration Summary:")
+    logger.info(f"   Multi-GPU mode: {use_multi_gpu}")
+    logger.info(f"   DiT GPUs: {num_gpus_dit}")
+    logger.info(f"   VAE Parallel: {enable_vae_parallel}")
+    logger.info(f"   Memory optimizations: FP8={args.fp8}, T5_CPU={args.t5_cpu}, KV_Offload={args.offload_kv_cache}, Model_Offload={args.offload_model}")
     
     training_settings = parse_args_for_training_config(args.training_config)
     
@@ -167,6 +217,7 @@ async def startup_event():
         logger.info("✅ Pipeline initialized successfully!")
     except Exception as e:
         logger.error(f"❌ Failed to initialize pipeline: {e}")
+        logger.error(traceback.format_exc())
         raise
 
 
