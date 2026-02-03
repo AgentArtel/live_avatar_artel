@@ -80,6 +80,18 @@ async def startup_event():
     
     logger.info("Initializing LiveAvatar pipeline...")
     
+    # Set PyTorch CUDA memory allocation config to reduce fragmentation
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+    
+    # Clear any existing GPU memory before initialization
+    if torch.cuda.is_available():
+        logger.info("Clearing GPU memory before initialization...")
+        torch.cuda.empty_cache()
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
+        logger.info(f"GPU memory after cleanup: {torch.cuda.memory_allocated() / 1024**3:.2f} GB allocated")
+    
     os.environ["RANK"] = "0"
     os.environ["WORLD_SIZE"] = "1"
     os.environ["LOCAL_RANK"] = "0"
