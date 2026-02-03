@@ -95,7 +95,7 @@ async def startup_event():
     
     # Set memory optimization environment variables
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-    os.environ["ENABLE_FP8"] = "true"
+    # os.environ["ENABLE_FP8"] = "true"  # Disabled - A100 doesn't support fp8e4nv format
     
     # Set NCCL environment variables (required for multi-GPU)
     os.environ["MASTER_ADDR"] = "localhost"
@@ -180,7 +180,7 @@ async def startup_event():
     parser.add_argument("--sample_solver", type=str, default="euler")
     parser.add_argument("--single_gpu", action="store_true", default=single_gpu)
     parser.add_argument("--ckpt_dir", type=str, default="/workspace/LiveAvatar/ckpt/Wan2.2-S2V-14B/")
-    parser.add_argument("--fp8", action="store_true", default=True)  # Enable FP8 by default
+    parser.add_argument("--fp8", action="store_true", default=False)  # Disabled for A100 compatibility
     
     # Missing arguments that are required
     parser.add_argument("--ulysses_size", type=int, default=1)
@@ -211,7 +211,7 @@ async def startup_event():
     args.ulysses_size = 1
     args.t5_fsdp = False
     args.dit_fsdp = False
-    args.fp8 = True  # Force FP8 for memory savings
+    args.fp8 = False  # Disabled - A100 doesn't support fp8e4nv format
     args.t5_cpu = True  # Force T5 to CPU - saves ~5-6GB
     args.offload_kv_cache = True  # Offload KV cache to CPU
     args.offload_model = offload_model
