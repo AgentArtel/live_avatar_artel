@@ -97,19 +97,19 @@ async def startup_event():
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
     os.environ["ENABLE_FP8"] = "true"
     
+    # Set NCCL environment variables (required for multi-GPU)
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "29500"
+    os.environ["RANK"] = "0"
+    os.environ["WORLD_SIZE"] = "2" if num_gpus >= 2 else "1"
+    os.environ["LOCAL_RANK"] = "0"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0,1" if num_gpus >= 2 else "0"
+    
     # Configure for multi-GPU (2 GPUs: 1 DiT + 1 VAE parallel) or single-GPU
-    use_multi_gpu = False  # Start with False, try to enable if conditions are met
+    use_multi_gpu = False
     
     if num_gpus >= 2:
         logger.info("🚀 Attempting 2-GPU setup (1 DiT GPU + 1 VAE parallel GPU)")
-        
-        # Set required environment variables for NCCL
-        os.environ["RANK"] = "0"
-        os.environ["WORLD_SIZE"] = "2"
-        os.environ["LOCAL_RANK"] = "0"
-        os.environ["MASTER_ADDR"] = "localhost"
-        os.environ["MASTER_PORT"] = "29500"
-        os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
         
         # Try to initialize NCCL for multi-GPU
         try:
@@ -129,6 +129,8 @@ async def startup_event():
             if dist.is_initialized():
                 dist.destroy_process_group()
             use_multi_gpu = False
+            # Reset to single-GPU environment
+            os.environ["WORLD_SIZE"] = "1"
     
     # Single-GPU configuration (either by default or after multi-GPU failure)
     if not use_multi_gpu:
