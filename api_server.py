@@ -22,6 +22,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from minimal_inference.gradio_app import initialize_pipeline, _run_inference_computation
 from liveavatar.utils.args_config import parse_args_for_training_config
+from liveavatar.models.wan.wan_2_2.utils.utils import str2bool
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -93,14 +94,16 @@ async def startup_event():
     
     import argparse
     parser = argparse.ArgumentParser()
+    
+    # Required arguments for pipeline initialization
     parser.add_argument("--task", type=str, default="s2v-14B")
     parser.add_argument("--size", type=str, default="704*384")
     parser.add_argument("--base_seed", type=int, default=420)
     parser.add_argument("--training_config", type=str, default="liveavatar/configs/s2v_causal_sft.yaml")
-    parser.add_argument("--offload_model", type=bool, default=True)
-    parser.add_argument("--convert_model_dtype", action="store_true")
+    parser.add_argument("--offload_model", type=str2bool, default=True)
+    parser.add_argument("--convert_model_dtype", action="store_true", default=False)
     parser.add_argument("--infer_frames", type=int, default=48)
-    parser.add_argument("--load_lora", action="store_true")
+    parser.add_argument("--load_lora", action="store_true", default=True)
     parser.add_argument("--lora_path_dmd", type=str, default="Quark-Vision/Live-Avatar")
     parser.add_argument("--sample_steps", type=int, default=4)
     parser.add_argument("--sample_guide_scale", type=float, default=0.0)
@@ -111,9 +114,33 @@ async def startup_event():
     parser.add_argument("--ckpt_dir", type=str, default="/workspace/LiveAvatar/ckpt/Wan2.2-S2V-14B/")
     parser.add_argument("--fp8", action="store_true", default=False)
     
+    # Missing arguments that are required
+    parser.add_argument("--ulysses_size", type=int, default=1)
+    parser.add_argument("--t5_fsdp", action="store_true", default=False)
+    parser.add_argument("--t5_cpu", action="store_true", default=False)
+    parser.add_argument("--dit_fsdp", action="store_true", default=False)
+    parser.add_argument("--save_dir", type=str, default="./output/gradio/")
+    parser.add_argument("--sample_shift", type=float, default=None)
+    parser.add_argument("--frame_num", type=int, default=None)
+    parser.add_argument("--lora_path", type=str, default=None)
+    parser.add_argument("--using_merged_ckpt", action="store_true", default=False)
+    parser.add_argument("--enable_vae_parallel", action="store_true", default=False)
+    parser.add_argument("--offload_kv_cache", action="store_true", default=False)
+    parser.add_argument("--enable_tts", action="store_true", default=False)
+    parser.add_argument("--pose_video", type=str, default=None)
+    parser.add_argument("--start_from_ref", action="store_true", default=False)
+    parser.add_argument("--drop_motion_noisy", action="store_true", default=False)
+    parser.add_argument("--server_port", type=int, default=7860)
+    parser.add_argument("--server_name", type=str, default="0.0.0.0")
+    
     args = parser.parse_args([])
+    
+    # Ensure single GPU settings
     args.single_gpu = True
     args.enable_vae_parallel = False
+    args.ulysses_size = 1
+    args.t5_fsdp = False
+    args.dit_fsdp = False
     
     training_settings = parse_args_for_training_config(args.training_config)
     
