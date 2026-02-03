@@ -19,11 +19,22 @@ This script will:
 **Time:** ~10-15 minutes (models already persist on volume disk)
 
 ### 2. Start Server
+
+**Option A: Use the start script (Recommended)**
 ```bash
+cd /workspace/LiveAvatar
+bash start_server.sh
+```
+
+**Option B: Manual start**
+```bash
+source ~/miniconda3/etc/profile.d/conda.sh
 conda activate liveavatar
 cd /workspace/LiveAvatar
 python api_server.py
 ```
+
+The `start_server.sh` script automatically handles conda activation and environment verification.
 
 ### 3. Verify Server is Running
 In a new terminal or via RunPod web terminal:
@@ -239,7 +250,7 @@ const downloadVideo = (jobId) => {
 ## Next Steps
 
 1. ✅ Run `setup.sh` after pod restart
-2. ✅ Start server with `python api_server.py`
+2. ✅ Start server with `bash start_server.sh` (or `python api_server.py`)
 3. ✅ Get your RunPod HTTP Service URL
 4. ✅ Test API endpoints
 5. ✅ Integrate with Lovable frontend
